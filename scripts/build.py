@@ -34,7 +34,10 @@ from typing import Iterable, Iterator
 DEFAULT_REPO = "lhxyzCJ/anywhere-proxy-rule"
 USER_AGENT = "anywhere-proxy-rule/2.0 (+https://github.com/lhxyzCJ/anywhere-proxy-rule)"
 
-MAX_RULES_PER_SET = 100_000
+# Current Anywhere builds allow 200,000 rules per custom set (the
+# documentation still mentions 100,000).  Individual CN sets are still split
+# conservatively so they also work on older builds.
+MAX_RULES_PER_SET = 200_000
 DEFAULT_SPLIT_LIMIT = 90_000
 CHINA_TZ = timezone(timedelta(hours=8))
 
@@ -870,6 +873,18 @@ def build(args: argparse.Namespace) -> dict[str, object]:
     require("Foreign direct", foreign, 500)
     require("LAN", lan, 100)
 
+    # All generated sets use DIRECT, so they can be merged into one
+    # subscription.  Deduplicate across sets to stay well below the 200k cap.
+    all_direct = dedupe_sorted(
+        set(cn_domains) | set(cn_ip) | set(apple) | set(tesla) | set(foreign) | set(lan)
+    )
+    require("All direct", all_direct, 100_000)
+    if len(all_direct) > MAX_RULES_PER_SET:
+        raise RuntimeError(
+            f"merged DIRECT set has {len(all_direct)} rules, exceeding the "
+            f"{MAX_RULES_PER_SET} rule limit"
+        )
+
     cn_parts = split_even(cn_domains, args.limit, min_parts=2)
     outputs: list[tuple[str, str, list[Rule], str]] = []
     for index, part in enumerate(cn_parts, start=1):
@@ -912,6 +927,12 @@ def build(args: argparse.Namespace) -> dict[str, object]:
                 "局域网直连",
                 lan,
                 "Loyalsoldier + Karing + XTLS Xray",
+            ),
+            (
+                "All-Direct.arrs",
+                "全部直连（合并订阅）",
+                all_direct,
+                "Merged CN + Apple + Tesla + Foreign-Direct + LAN",
             ),
         ]
     )
@@ -1006,7 +1027,10 @@ def build(args: argparse.Namespace) -> dict[str, object]:
 | --- | ---: | --- | --- |
 {table}
 
-> `CN-Domains-1.arrs` 和 `CN-Domains-2.arrs` 必须同时添加。
+> **只用一个地址：只添加 `All-Direct.arrs`。** 它合并了全部 DIRECT 规则（当前 {len(all_direct):,} 条）。
+> 当前 Anywhere 代码允许每套 200,000 条；旧版若仍限制 100,000 条会拒绝，请更新 App 或使用拆分订阅。
+>
+> 拆分方案：`CN-Domains-1.arrs` 和 `CN-Domains-2.arrs` 必须同时添加。
 > `Foreign-Direct.arrs` 只包含 Xray geosite / Karing 标记为 `@cn` 的国外域名，以及 AMD/Intel/Adobe/Samsung/NVIDIA 等常见厂商分类；GitHub、Hugging Face、Steam 商店等仍走代理。
 
 ## 在 Anywhere 中配置

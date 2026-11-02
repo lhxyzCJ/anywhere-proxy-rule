@@ -14,6 +14,7 @@
 
 | 规则集 | 条数 | 用途 | 动作 | 订阅 |
 | --- | ---: | --- | --- | --- |
+| `All-Direct.arrs` | 约 134,500 | **合并全部 DIRECT 规则（单地址）** | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/All-Direct.arrs) |
 | `CN-Domains-1.arrs` | 约 57,500 | 国内域名直连（前半） | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/CN-Domains-1.arrs) |
 | `CN-Domains-2.arrs` | 约 57,500 | 国内域名直连（后半） | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/CN-Domains-2.arrs) |
 | `CN-IP.arrs` | 约 16,800 | 国内 IPv4 / IPv6 CIDR | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/CN-IP.arrs) |
@@ -22,7 +23,11 @@
 | `Foreign-Direct.arrs` | 约 1,300 | 国外可直连域名（Xray/Karing `@cn` + 常见厂商） | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/Foreign-Direct.arrs) |
 | `LAN.arrs` | 约 170 | 局域网 CIDR、路由器本地域名 | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/LAN.arrs) |
 
-> **`CN-Domains-1.arrs` 和 `CN-Domains-2.arrs` 必须同时添加。**
+> **只用一个地址：只订阅 `All-Direct.arrs` 即可。** 它已经合并下面所有 DIRECT 集合（当前约 134,500 条）。
+>
+> 当前 Anywhere 代码允许每套 200,000 条规则；旧版本如果仍然限制 100,000 条，会拒绝这个合并集，此时请更新 App，或继续使用拆分订阅。
+>
+> **拆分方案：`CN-Domains-1.arrs` 和 `CN-Domains-2.arrs` 必须同时添加。**
 >
 > `Foreign-Direct.arrs` 不是“国外域名大全”，而是 Xray geosite / Karing 标记为 `@cn` 的国外域名，以及 AMD、Intel、Adobe、Samsung、NVIDIA 等常见驱动/软件厂商分类中适合直连的部分。GitHub、Hugging Face、Steam 商店等仍走代理。
 
@@ -48,14 +53,16 @@
 1. 打开 **Routing**，路由模式选择 **Rule**。
 2. 默认路由选择你的代理节点、代理组或代理链。
 3. **Country Bypass** 选择 **中国 (CN)**。
-4. 添加上表全部 7 个 `.arrs` 订阅，逐条把动作设为 **DIRECT**。
+4. 二选一：
+   - **单地址**：只添加 `All-Direct.arrs`，动作设为 **DIRECT**。
+   - **拆分**：添加 `CN-Domains-1/2`、`CN-IP`、`Apple`、`Tesla`、`Foreign-Direct`、`LAN`，全部设为 **DIRECT**。
 5. 内置服务规则保持 **Default**，不要批量指派 **PROXY**。
 6. 可选：把 **ADBlock** 设为 **REJECT**。
 
 添加订阅的入口：
 
 ```text
-Routing → 右上角 + → Subscribe Rule Set → 粘贴上面的 URL
+Routing → 右上角 + → Subscribe Rule Set → 粘贴 All-Direct.arrs 的 URL
 ```
 
 也可以下载 `.arrs` 后用 `Import Rule Set` 导入。
@@ -115,7 +122,7 @@ DOMAIN-KEYWORD,x   -> 3, x                # 域名关键字
 - **手动**：GitHub 仓库 → **Actions** → **Update rule sets** → **Run workflow**。
 - **Release**：标签格式 `rules-YYYY.MM.DD`。同一天重复运行会替换当天的 Release。
 - **保留策略**：只保留最近 **3 天**的 Release，更早的 Release 和标签会自动清理；`latest` 订阅链接不受影响。
-- **产物**：7 个 `.arrs` 文件、`manifest.json`、`SHA256SUMS`。
+- **产物**：8 个 `.arrs` 文件（含单地址合并集）、`manifest.json`、`SHA256SUMS`。
 - **状态**：仓库根目录的 `status.json` 每天更新一次，记录生成时间和各文件条数。
 - **固定链接**：`https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/<文件名>`。
 
