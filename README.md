@@ -83,6 +83,7 @@ example.com        -> 2, example.com      # Anywhere 没有 exact-domain，按�
 - **定时**：每天 `19:00 UTC`，即北京时间 `03:00`。
 - **手动**：GitHub 仓库 → **Actions** → **Update rule sets** → **Run workflow**。
 - **Release**：标签格式 `rules-YYYY.MM.DD`。同一天重复运行会替换当天的 Release，不会产生重复版本。
+- **保留策略**：只保留最近 30 个 Release，更早的 Release 和标签会自动清理；`latest` 订阅链接不受影响。
 - **产物**：5 个 `.arrs` 文件、`manifest.json`、`SHA256SUMS`。
 - **状态**：仓库根目录的 `status.json` 每天更新一次，记录生成时间和各文件条数。
 - **固定链接**：`https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/<文件名>`。

@@ -19,12 +19,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -49,6 +49,19 @@ jobs:
             --title "Anywhere 分流规则 $(TZ=Asia/Shanghai date +%Y-%m-%d)" \
             --notes-file dist/RELEASE_NOTES.md \
             --latest
+
+      - name: Prune old releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[].tag_name' \
+            | tail -n +31 \
+            | while read -r tag; do
+                [ -n "$tag" ] || continue
+                gh release delete "$tag" --cleanup-tag --yes >/dev/null 2>&1 || true
+              done
 
       - name: Record status
         if: github.ref_name == github.event.repository.default_branch
