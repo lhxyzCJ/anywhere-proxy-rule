@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Build Anywhere .arrs rule sets from Loyalsoldier/clash-rules.
+"""Build comprehensive Anywhere .arrs rule sets.
 
-The generated sets implement a China-direct routing layout:
+Routing model:
 
   * default route -> proxy
-  * CN-Domains-*.arrs, CN-IP.arrs, Apple.arrs, LAN.arrs -> DIRECT
+  * CN-Domains-*.arrs, CN-IP.arrs -> DIRECT
+  * Apple.arrs, Tesla.arrs, Foreign-Direct.arrs -> DIRECT
+  * LAN.arrs -> DIRECT
 
-Only the Python standard library is required.
+Sources: Loyalsoldier, blackmatrix7, Karing, XTLS Xray-rules-dat and
+ACL4SSR.  The generated sets are intentionally explicit DIRECT exceptions;
+foreign traffic that is not listed falls through to the default proxy.
 """
 
 from __future__ import annotations
@@ -21,49 +25,141 @@ import re
 import sys
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Iterable, Iterator
 
 DEFAULT_REPO = "lhxyzCJ/anywhere-proxy-rule"
-USER_AGENT = "anywhere-proxy-rule/1.0 (+https://github.com/lhxyzCJ/anywhere-proxy-rule)"
-
-MIRRORS = (
-    "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/",
-    "https://fastly.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/",
-    "https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/",
-)
+USER_AGENT = "anywhere-proxy-rule/2.0 (+https://github.com/lhxyzCJ/anywhere-proxy-rule)"
 
 MAX_RULES_PER_SET = 100_000
 DEFAULT_SPLIT_LIMIT = 90_000
 CHINA_TZ = timezone(timedelta(hours=8))
 
+LOYAL = "Loyalsoldier/clash-rules"
+BM7 = "blackmatrix7/ios_rule_script"
+KARING = "KaringX/karing-ruleset"
+XRAY_RELEASE = "https://github.com/XTLS/Xray-rules-dat/releases/latest/download/{asset}"
+
+# Domains that are too broad to live in a DIRECT set.  Exact matches only:
+# specific subdomains such as apple.com.akadns.net remain allowed.
+BROAD_DIRECT_SUFFIXES = {
+    "akadns.net",
+    "akamaized.net",
+    "akamai.net",
+    "amazonaws.com",
+    "azureedge.net",
+    "cloudfront.net",
+    "edgekey.net",
+    "edgesuite.net",
+    "fastly.net",
+    "googleapis.com",
+    "googleusercontent.com",
+    "gstatic.com",
+}
+
+GENERIC_TLDS = {
+    "ai",
+    "app",
+    "biz",
+    "blog",
+    "cloud",
+    "club",
+    "co",
+    "com",
+    "dev",
+    "info",
+    "io",
+    "live",
+    "me",
+    "net",
+    "news",
+    "online",
+    "org",
+    "shop",
+    "site",
+    "top",
+    "xyz",
+}
+
+# Full vendor categories are useful for driver/software downloads, but a few
+# entries in those categories must stay on the proxy.
+FOREIGN_DIRECT_DENYLIST = {
+    "github.ai",
+    "github.blog",
+    "github.career",
+    "github.com",
+    "github.community",
+    "github.dev",
+    "github.io",
+    "githubapp.com",
+    "hf.co",
+    "hf.space",
+    "huggingface.co",
+}
+
+Rule = tuple[int, str]
+
+
+def mirrors(repo: str, ref: str, path: str) -> tuple[str, ...]:
+    return (
+        f"https://cdn.jsdelivr.net/gh/{repo}@{ref}/{path}",
+        f"https://fastly.jsdelivr.net/gh/{repo}@{ref}/{path}",
+        f"https://raw.githubusercontent.com/{repo}/{ref}/{path}",
+    )
+
 
 @dataclass(frozen=True)
-class Source:
-    filename: str
-    min_count: int
+class Download:
+    key: str
+    urls: tuple[str, ...]
+    min_bytes: int
     label: str
 
 
-SOURCES = {
-    "direct": Source("direct.txt", 95_000, "国内域名"),
-    "cncidr": Source("cncidr.txt", 9_000, "国内 IP"),
-    "apple": Source("apple.txt", 150, "Apple"),
-    "icloud": Source("icloud.txt", 40, "iCloud"),
-    "lancidr": Source("lancidr.txt", 20, "局域网 CIDR"),
-    "private": Source("private.txt", 100, "路由器/本地域名"),
-}
-
-LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+@dataclass
+class Parsed:
+    rules: list[Rule]
+    invalid: int = 0
+    skipped: int = 0
 
 
-@dataclass(frozen=True)
-class Output:
-    filename: str
-    name: str
-    rules: list[tuple[int, str]]
-    source: str
+DOWNLOADS: tuple[Download, ...] = (
+    # Loyalsoldier / Clash
+    Download("loyalsoldier-direct", mirrors(LOYAL, "release", "direct.txt"), 1_500_000, "Loyalsoldier direct"),
+    Download("loyalsoldier-cncidr", mirrors(LOYAL, "release", "cncidr.txt"), 150_000, "Loyalsoldier cncidr"),
+    Download("loyalsoldier-apple", mirrors(LOYAL, "release", "apple.txt"), 4_000, "Loyalsoldier apple"),
+    Download("loyalsoldier-icloud", mirrors(LOYAL, "release", "icloud.txt"), 800, "Loyalsoldier icloud"),
+    Download("loyalsoldier-lancidr", mirrors(LOYAL, "release", "lancidr.txt"), 300, "Loyalsoldier lancidr"),
+    Download("loyalsoldier-private", mirrors(LOYAL, "release", "private.txt"), 2_000, "Loyalsoldier private"),
+    # blackmatrix7 / Clash
+    Download("bm7-chinamax-domain", mirrors(BM7, "master", "rule/Clash/ChinaMax/ChinaMax_Domain.yaml"), 1_500_000, "blackmatrix7 ChinaMax domain"),
+    Download("bm7-chinamax-ip", mirrors(BM7, "master", "rule/Clash/ChinaMax/ChinaMax_IP.yaml"), 150_000, "blackmatrix7 ChinaMax IP"),
+    Download("bm7-apple-domain", mirrors(BM7, "master", "rule/Clash/Apple/Apple_Domain.yaml"), 25_000, "blackmatrix7 Apple domain"),
+    Download("bm7-apple", mirrors(BM7, "master", "rule/Clash/Apple/Apple.yaml"), 500, "blackmatrix7 Apple rules"),
+    Download("bm7-tesla", mirrors(BM7, "master", "rule/Clash/Tesla/Tesla.yaml"), 300, "blackmatrix7 Tesla"),
+    # Karing / sing-box geo data
+    Download("karing-cn", mirrors(KARING, "sing", "geo/geosite/cn.json"), 1_500_000, "Karing geosite cn"),
+    Download("karing-apple", mirrors(KARING, "sing", "geo/geosite/apple.json"), 30_000, "Karing geosite apple"),
+    Download("karing-tesla", mirrors(KARING, "sing", "geo/geosite/tesla.json"), 200, "Karing geosite tesla"),
+    Download("karing-microsoft-cn", mirrors(KARING, "sing", "geo/geosite/microsoft@cn.json"), 3_000, "Karing geosite microsoft@cn"),
+    Download("karing-nvidia-cn", mirrors(KARING, "sing", "geo/geosite/nvidia@cn.json"), 100, "Karing geosite nvidia@cn"),
+    Download("karing-samsung-cn", mirrors(KARING, "sing", "geo/geosite/samsung@cn.json"), 50, "Karing geosite samsung@cn"),
+    Download("karing-nintendo-cn", mirrors(KARING, "sing", "geo/geosite/nintendo@cn.json"), 100, "Karing geosite nintendo@cn"),
+    Download("karing-steam-cn", mirrors(KARING, "sing", "geo/geosite/steam@cn.json"), 100, "Karing geosite steam@cn"),
+    Download("karing-google-cn", mirrors(KARING, "sing", "geo/geosite/google@cn.json"), 1_000, "Karing geosite google@cn"),
+    Download("karing-cn-ip", mirrors(KARING, "sing", "geo/geoip/cn.json"), 150_000, "Karing geoip cn"),
+    Download("karing-private-ip", mirrors(KARING, "sing", "geo/geoip/private.json"), 300, "Karing geoip private"),
+    # Karing's bundled ACL4SSR rule fragments
+    Download("acl4ssr-china-domain", mirrors(KARING, "sing", "ACL4SSR/ChinaDomain.json"), 5_000, "ACL4SSR ChinaDomain"),
+    Download("acl4ssr-china-ip", mirrors(KARING, "sing", "ACL4SSR/ChinaIp.json"), 80_000, "ACL4SSR ChinaIp"),
+    Download("acl4ssr-apple", mirrors(KARING, "sing", "ACL4SSR/Apple.json"), 300, "ACL4SSR Apple"),
+    # XTLS Xray-maintained geo rules
+    Download("xray-geosite", (XRAY_RELEASE.format(asset="geosite.dat"),), 5_000_000, "XTLS geosite.dat"),
+    Download("xray-geoip", (XRAY_RELEASE.format(asset="geoip-lite.dat"),), 2_000_000, "XTLS geoip-lite.dat"),
+)
 
 
 def parse_payload(text: str) -> list[str]:
@@ -76,7 +172,6 @@ def parse_payload(text: str) -> list[str]:
         if line.startswith("- "):
             line = line[2:].strip()
         elif line.endswith(":"):
-            # ``payload:`` and other YAML section headers.
             continue
         if len(line) >= 2 and line[0] == line[-1] and line[0] in "'\"":
             line = line[1:-1]
@@ -92,6 +187,9 @@ def normalize_domain(value: str) -> str | None:
     value = value.lstrip(".").rstrip(".").lower()
     if not value or len(value) > 253:
         return None
+    # Reject stray single characters such as the malformed Karing @cn lists.
+    if "." not in value and len(value) == 1:
+        return None
 
     if any(ord(char) > 127 for char in value):
         try:
@@ -100,25 +198,42 @@ def normalize_domain(value: str) -> str | None:
             return None
 
     labels = value.split(".")
-    if any(not LABEL_RE.fullmatch(label) for label in labels):
+    if any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels):
         return None
     return value
 
 
-def to_rule(value: str) -> tuple[int, str] | None:
+def valid_keyword(value: str) -> bool:
+    value = value.strip().lower()
+    return (
+        len(value) >= 2
+        and value not in {".", ".."}
+        and bool(re.fullmatch(r"[a-z0-9._-]+", value))
+    )
+
+
+def network_rule(network: ipaddress.IPv4Network | ipaddress.IPv6Network) -> Rule:
+    """Convert a network, folding IPv4-mapped IPv6 ranges back to IPv4."""
+    if isinstance(network, ipaddress.IPv6Network):
+        mapped = network.network_address.ipv4_mapped
+        if mapped is not None and network.prefixlen > 96:
+            prefix = network.prefixlen - 96
+            return 0, str(ipaddress.ip_network((mapped, prefix), strict=False))
+    return (0 if network.version == 4 else 1), str(network)
+
+
+def to_rule(value: str) -> Rule | None:
     """Convert one source entry to an Anywhere ``(type, value)`` rule."""
     value = value.strip().strip("'\"").strip()
     if not value:
         return None
 
-    # CIDR or a bare IP address. A bare address becomes /32 or /128.
     try:
         network = ipaddress.ip_network(value, strict=False)
     except ValueError:
         pass
     else:
-        rule_type = 0 if network.version == 4 else 1
-        return rule_type, str(network)
+        return network_rule(network)
 
     domain = normalize_domain(value)
     if domain:
@@ -126,30 +241,333 @@ def to_rule(value: str) -> tuple[int, str] | None:
     return None
 
 
-def rule_sort_key(rule: tuple[int, str]) -> tuple[int, str]:
-    return rule[0], rule[1]
+def parse_clash_value(value: str) -> Rule | None:
+    value = value.strip().strip("'\"").strip()
+    if not value:
+        return None
+
+    if "," in value:
+        prefix, rest = value.split(",", 1)
+        prefix = prefix.strip().upper()
+        rest = rest.split(",", 1)[0].strip()
+
+        if prefix in {"DOMAIN", "DOMAIN-SUFFIX"}:
+            domain = normalize_domain(rest)
+            return (2, domain) if domain else None
+        if prefix == "DOMAIN-KEYWORD":
+            keyword = rest.lower().strip()
+            return (3, keyword) if valid_keyword(keyword) else None
+        if prefix in {"IP-CIDR", "IP-CIDR6"}:
+            return to_rule(rest)
+        # PROCESS-NAME, IP-ASN, GEOIP, RULE-SET and similar are unsupported.
+        return None
+
+    return to_rule(value)
 
 
-def convert(values: list[str], label: str) -> tuple[list[tuple[int, str]], int]:
-    rules: set[tuple[int, str]] = set()
+def parse_clash(text: str) -> Parsed:
+    rules: list[Rule] = []
     invalid = 0
-    for value in values:
-        rule = to_rule(value)
-        if rule is None:
-            invalid += 1
+    for value in parse_payload(text):
+        rule = parse_clash_value(value)
+        if rule:
+            rules.append(rule)
         else:
-            rules.add(rule)
-    if invalid > max(10, len(values) // 50):
-        raise RuntimeError(
-            f"{label}: {invalid}/{len(values)} entries could not be parsed; "
-            "refusing to publish a partially converted set"
-        )
-    return sorted(rules, key=rule_sort_key), invalid
+            invalid += 1
+    return Parsed(rules, invalid)
 
 
-def split_even(
-    rules: list[tuple[int, str]], limit: int, min_parts: int = 2
-) -> list[list[tuple[int, str]]]:
+def parse_karing_json(data: bytes) -> Parsed:
+    document = json.loads(data.decode("utf-8"))
+    rules: list[Rule] = []
+    invalid = 0
+    skipped = 0
+
+    for item in document.get("rules", []):
+        for key in ("domain", "domain_suffix"):
+            for value in item.get(key, []):
+                rule = to_rule(value)
+                if rule:
+                    rules.append(rule)
+                else:
+                    invalid += 1
+        for value in item.get("domain_keyword", []):
+            keyword = str(value).lower().strip()
+            if valid_keyword(keyword):
+                rules.append((3, keyword))
+            else:
+                invalid += 1
+        for value in item.get("ip_cidr", []):
+            rule = to_rule(value)
+            if rule:
+                rules.append(rule)
+            else:
+                invalid += 1
+        skipped += len(item.get("domain_regex", []))
+        skipped += len(item.get("process_name", []))
+        skipped += len(item.get("package_name", []))
+
+    return Parsed(rules, invalid, skipped)
+
+
+# ---------------------------------------------------------------------------
+# Minimal protobuf reader for XTLS geosite.dat / geoip.dat
+# ---------------------------------------------------------------------------
+
+
+def _read_varint(data: bytes, position: int) -> tuple[int, int]:
+    result = 0
+    shift = 0
+    while True:
+        if position >= len(data):
+            raise ValueError("truncated varint")
+        byte = data[position]
+        position += 1
+        result |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return result, position
+        shift += 7
+        if shift > 63:
+            raise ValueError("varint too long")
+
+
+def _proto_fields(data: bytes) -> Iterator[tuple[int, int, object]]:
+    position = 0
+    while position < len(data):
+        key, position = _read_varint(data, position)
+        field = key >> 3
+        wire = key & 0x07
+        if wire == 0:
+            value, position = _read_varint(data, position)
+        elif wire == 2:
+            length, position = _read_varint(data, position)
+            end = position + length
+            if end > len(data):
+                raise ValueError("truncated length-delimited field")
+            value = data[position:end]
+            position = end
+        elif wire == 1:
+            value = data[position : position + 8]
+            position += 8
+        elif wire == 5:
+            value = data[position : position + 4]
+            position += 4
+        else:
+            raise ValueError(f"unsupported protobuf wire type {wire}")
+        yield field, wire, value
+
+
+def _parse_xray_attribute(data: bytes) -> tuple[str, bool]:
+    key = ""
+    value = False
+    for field, wire, raw in _proto_fields(data):
+        if field == 1 and wire == 2:
+            key = raw.decode("utf-8", "replace").lower()
+        elif field == 2 and wire == 0:
+            value = bool(raw)
+    return key, value
+
+
+def _parse_xray_domain(data: bytes) -> tuple[int, str, set[str]]:
+    rule_type = 0
+    value = ""
+    attributes: set[str] = set()
+    for field, wire, raw in _proto_fields(data):
+        if field == 1 and wire == 0:
+            rule_type = int(raw)
+        elif field == 2 and wire == 2:
+            value = raw.decode("utf-8", "replace")
+        elif field == 3 and wire == 2:
+            key, enabled = _parse_xray_attribute(raw)
+            if key and enabled:
+                attributes.add(key)
+    return rule_type, value, attributes
+
+
+def parse_xray_geosite(data: bytes) -> dict[str, list[tuple[int, str, set[str]]]]:
+    sites: dict[str, list[tuple[int, str, set[str]]]] = {}
+    for field, wire, raw in _proto_fields(data):
+        if field != 1 or wire != 2:
+            continue
+        code = ""
+        domains: list[tuple[int, str, set[str]]] = []
+        for inner_field, inner_wire, inner in _proto_fields(raw):
+            if inner_field == 1 and inner_wire == 2:
+                code = inner.decode("utf-8", "replace")
+            elif inner_field == 2 and inner_wire == 2:
+                domains.append(_parse_xray_domain(inner))
+        if code:
+            sites.setdefault(code, []).extend(domains)
+    return sites
+
+
+def parse_xray_geoip(data: bytes) -> dict[str, list[Rule]]:
+    sites: dict[str, list[Rule]] = {}
+    for field, wire, raw in _proto_fields(data):
+        if field != 1 or wire != 2:
+            continue
+        code = ""
+        cidrs: list[Rule] = []
+        for inner_field, inner_wire, inner in _proto_fields(raw):
+            if inner_field == 1 and inner_wire == 2:
+                code = inner.decode("utf-8", "replace")
+            elif inner_field == 2 and inner_wire == 2:
+                address = None
+                prefix = 0
+                for cidr_field, cidr_wire, cidr_value in _proto_fields(inner):
+                    if cidr_field == 1 and cidr_wire == 2:
+                        address = cidr_value
+                    elif cidr_field == 2 and cidr_wire == 0:
+                        prefix = int(cidr_value)
+                if address is None:
+                    continue
+                try:
+                    network = ipaddress.ip_network(
+                        (ipaddress.ip_address(address), prefix), strict=False
+                    )
+                except ValueError:
+                    continue
+                cidrs.append(network_rule(network))
+        if code:
+            sites.setdefault(code, []).extend(cidrs)
+    return sites
+
+
+def xray_site_rules(
+    sites: dict[str, list[tuple[int, str, set[str]]]],
+    categories: Iterable[str],
+    only_cn: bool = False,
+) -> Parsed:
+    rules: list[Rule] = []
+    invalid = 0
+    skipped = 0
+    for category in categories:
+        for rule_type, value, attributes in sites.get(category, []):
+            if rule_type == 1:
+                skipped += 1
+                continue
+            if only_cn and "cn" not in attributes:
+                skipped += 1
+                continue
+            rule = to_rule(value)
+            if rule:
+                rules.append(rule)
+            else:
+                invalid += 1
+    return Parsed(rules, invalid, skipped)
+
+
+# ---------------------------------------------------------------------------
+# Download and output helpers
+# ---------------------------------------------------------------------------
+
+
+def fetch_one(
+    spec: Download,
+    cache_dir: Path | None,
+    refresh: bool,
+    attempts: int,
+    timeout: int,
+) -> tuple[bytes, str]:
+    cache_path = cache_dir / spec.key if cache_dir else None
+    if cache_path and cache_path.exists() and not refresh:
+        data = cache_path.read_bytes()
+        if len(data) >= spec.min_bytes:
+            return data, f"cache:{cache_path}"
+
+    errors: list[str] = []
+    for attempt in range(1, attempts + 1):
+        for url in spec.urls:
+            try:
+                request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    if response.status != 200:
+                        raise RuntimeError(f"HTTP {response.status}")
+                    data = response.read()
+                if len(data) < spec.min_bytes:
+                    raise RuntimeError(
+                        f"only {len(data)} bytes, expected at least {spec.min_bytes}"
+                    )
+                if cache_path:
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_bytes(data)
+                return data, url
+            except Exception as exc:  # noqa: BLE001 - mirror fallback is intentional
+                errors.append(f"{url}: {type(exc).__name__}: {exc}")
+        if attempt < attempts:
+            time.sleep(attempt * 2)
+
+    raise RuntimeError("; ".join(errors[-6:]))
+
+
+def download_all(
+    specs: Iterable[Download],
+    cache_dir: Path | None,
+    refresh: bool,
+    attempts: int,
+    timeout: int,
+) -> dict[str, tuple[bytes, str]]:
+    specs = tuple(specs)
+    results: dict[str, tuple[bytes, str]] = {}
+    errors: list[str] = []
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {
+            pool.submit(fetch_one, spec, cache_dir, refresh, attempts, timeout): spec
+            for spec in specs
+        }
+        for future in as_completed(futures):
+            spec = futures[future]
+            try:
+                results[spec.key] = future.result()
+                print(f"fetched {spec.label}: {len(results[spec.key][0]):,} bytes", flush=True)
+            except Exception as exc:  # noqa: BLE001 - aggregated below
+                errors.append(f"{spec.key}: {exc}")
+                print(f"  ! failed {spec.label}: {exc}", file=sys.stderr, flush=True)
+
+    if errors:
+        raise RuntimeError("failed to download sources:\n" + "\n".join(errors))
+    return results
+
+
+def dedupe_sorted(rules: Iterable[Rule]) -> list[Rule]:
+    return sorted(set(rules), key=lambda rule: (rule[0], rule[1]))
+
+
+def safe_direct(rules: Iterable[Rule]) -> list[Rule]:
+    result: list[Rule] = []
+    for rule_type, value in rules:
+        if rule_type in (2, 3) and value in BROAD_DIRECT_SUFFIXES:
+            continue
+        if rule_type in (2, 3) and value in GENERIC_TLDS:
+            continue
+        result.append((rule_type, value))
+    return result
+
+
+def safe_cn_domains(rules: Iterable[Rule]) -> list[Rule]:
+    """Prevent a malformed upstream entry such as ``com`` from matching all."""
+    result: list[Rule] = []
+    for rule_type, value in rules:
+        if rule_type in (2, 3) and value in GENERIC_TLDS and value != "cn":
+            continue
+        result.append((rule_type, value))
+    return result
+
+
+def safe_foreign_direct(rules: Iterable[Rule]) -> list[Rule]:
+    result: list[Rule] = []
+    for rule_type, value in safe_direct(rules):
+        if rule_type in (2, 3) and any(
+            value == blocked or value.endswith("." + blocked)
+            for blocked in FOREIGN_DIRECT_DENYLIST
+        ):
+            continue
+        result.append((rule_type, value))
+    return result
+
+
+def split_even(rules: list[Rule], limit: int, min_parts: int = 2) -> list[list[Rule]]:
     """Split into balanced, stable parts, each no larger than ``limit``."""
     if not rules:
         raise RuntimeError("cannot split an empty rule set")
@@ -161,54 +579,10 @@ def split_even(
     return [rules[index : index + part_size] for index in range(0, len(rules), part_size)]
 
 
-def fetch_source(
-    source: Source,
-    source_dir: Path | None,
-    attempts: int,
-    timeout: int,
-) -> tuple[list[str], str]:
-    if source_dir is not None:
-        path = source_dir / source.filename
-        text = path.read_text(encoding="utf-8")
-        values = parse_payload(text)
-        if len(values) < source.min_count:
-            raise RuntimeError(
-                f"{path}: only {len(values)} entries, expected at least {source.min_count}"
-            )
-        return values, str(path)
-
-    errors: list[str] = []
-    for attempt in range(1, attempts + 1):
-        for base in MIRRORS:
-            url = base + source.filename
-            try:
-                request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-                with urllib.request.urlopen(request, timeout=timeout) as response:
-                    if response.status != 200:
-                        raise RuntimeError(f"HTTP {response.status}")
-                    body = response.read()
-                values = parse_payload(body.decode("utf-8"))
-                if len(values) < source.min_count:
-                    raise RuntimeError(
-                        f"only {len(values)} entries, expected at least {source.min_count}"
-                    )
-                return values, url
-            except Exception as exc:  # noqa: BLE001 - mirror fallback is intentional
-                errors.append(f"{url}: {type(exc).__name__}: {exc}")
-                print(f"  ! {url} ({type(exc).__name__})", file=sys.stderr)
-        if attempt < attempts:
-            time.sleep(attempt * 2)
-
-    raise RuntimeError(
-        f"failed to download {source.filename} from every mirror:\n"
-        + "\n".join(errors[-6:])
-    )
-
-
 def write_arrs(
     path: Path,
     name: str,
-    rules: list[tuple[int, str]],
+    rules: list[Rule],
     source_note: str,
     generated_at: str,
 ) -> dict[str, object]:
@@ -217,7 +591,7 @@ def write_arrs(
         "routing = 1",
         f"# Generated at {generated_at}",
         f"# Source: {source_note}",
-        f"# Rule types: 0 IPv4 CIDR, 1 IPv6 CIDR, 2 domain suffix, 3 domain keyword",
+        "# Rule types: 0 IPv4 CIDR, 1 IPv6 CIDR, 2 domain suffix, 3 domain keyword",
         f"# Rules: {len(rules)}",
         "",
     ]
@@ -240,7 +614,7 @@ def validate_arrs(path: Path, expected_rules: int) -> None:
     name = ""
     routing = ""
     count = 0
-    seen: set[tuple[int, str]] = set()
+    seen: set[Rule] = set()
 
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
@@ -279,76 +653,265 @@ def validate_arrs(path: Path, expected_rules: int) -> None:
         raise RuntimeError(f"{path}: duplicate rules found")
 
 
+def require(label: str, rules: list[Rule], minimum: int) -> None:
+    if len(rules) < minimum:
+        raise RuntimeError(f"{label}: only {len(rules)} rules, expected at least {minimum}")
+
+
 def build(args: argparse.Namespace) -> dict[str, object]:
     now_utc = datetime.now(timezone.utc).replace(microsecond=0)
     release_date = now_utc.astimezone(CHINA_TZ).strftime("%Y.%m.%d")
     generated_at = now_utc.isoformat().replace("+00:00", "Z")
     release_tag = "rules-" + release_date
 
-    raw: dict[str, list[str]] = {}
-    source_info: dict[str, dict[str, object]] = {}
-    for key, source in SOURCES.items():
-        print(f"fetch {source.filename} ({source.label}) ...", flush=True)
-        values, url = fetch_source(
-            source,
-            args.source_dir,
-            attempts=args.attempts,
-            timeout=args.timeout,
+    cache_dir = Path(args.cache_dir) if args.cache_dir else None
+    if cache_dir:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    downloaded = download_all(
+        DOWNLOADS,
+        cache_dir,
+        refresh=args.refresh,
+        attempts=args.attempts,
+        timeout=args.timeout,
+    )
+
+    def text(key: str) -> str:
+        return downloaded[key][0].decode("utf-8")
+
+    parsed: dict[str, Parsed] = {}
+    for key in (
+        "loyalsoldier-direct",
+        "loyalsoldier-cncidr",
+        "loyalsoldier-apple",
+        "loyalsoldier-icloud",
+        "loyalsoldier-lancidr",
+        "loyalsoldier-private",
+        "bm7-chinamax-domain",
+        "bm7-chinamax-ip",
+        "bm7-apple-domain",
+        "bm7-apple",
+        "bm7-tesla",
+    ):
+        parsed[key] = parse_clash(text(key))
+
+    for key in (
+        "karing-cn",
+        "karing-apple",
+        "karing-tesla",
+        "karing-microsoft-cn",
+        "karing-nvidia-cn",
+        "karing-samsung-cn",
+        "karing-nintendo-cn",
+        "karing-steam-cn",
+        "karing-google-cn",
+        "karing-cn-ip",
+        "karing-private-ip",
+        "acl4ssr-china-domain",
+        "acl4ssr-china-ip",
+        "acl4ssr-apple",
+    ):
+        parsed[key] = parse_karing_json(downloaded[key][0])
+
+    geosite = parse_xray_geosite(downloaded["xray-geosite"][0])
+    geoip = parse_xray_geoip(downloaded["xray-geoip"][0])
+    parsed["xray-cn"] = xray_site_rules(geosite, ("CN", "GEOLOCATION-CN", "TLD-CN"))
+    parsed["xray-apple"] = xray_site_rules(geosite, ("APPLE",))
+    parsed["xray-tesla"] = xray_site_rules(geosite, ("TESLA",))
+    parsed["xray-foreign"] = xray_site_rules(geosite, ("GEOLOCATION-!CN",), only_cn=True)
+    parsed["xray-foreign-categories"] = xray_site_rules(
+        geosite,
+        (
+            "MICROSOFT",
+            "NVIDIA",
+            "AMD",
+            "INTEL",
+            "SAMSUNG",
+            "NINTENDO",
+            "STEAM",
+            "EPICGAMES",
+            "ADOBE",
+            "GOOGLE",
+        ),
+        only_cn=True,
+    )
+    # Vendor sites and download endpoints that are commonly reachable
+    # directly.  NVIDIA's category also contains Hugging Face, which is
+    # filtered by FOREIGN_DIRECT_DENYLIST below.
+    parsed["xray-foreign-full"] = xray_site_rules(
+        geosite,
+        ("AMD", "INTEL", "ADOBE", "SAMSUNG", "NVIDIA"),
+    )
+    parsed["xray-cn-ip"] = Parsed(geoip.get("CN", []))
+    parsed["xray-private-ip"] = Parsed(geoip.get("PRIVATE", []))
+
+    # Guard against silently publishing a truncated source.
+    for key, minimum in {
+        "loyalsoldier-direct": 100_000,
+        "loyalsoldier-cncidr": 9_000,
+        "loyalsoldier-apple": 150,
+        "loyalsoldier-icloud": 40,
+        "loyalsoldier-lancidr": 20,
+        "loyalsoldier-private": 100,
+        "bm7-chinamax-domain": 100_000,
+        "bm7-chinamax-ip": 10_000,
+        "bm7-apple-domain": 1_300,
+        "bm7-apple": 10,
+        "bm7-tesla": 10,
+        "karing-cn": 100_000,
+        "karing-apple": 1_500,
+        "karing-tesla": 10,
+        "karing-microsoft-cn": 150,
+        "karing-nvidia-cn": 3,
+        "karing-cn-ip": 9_000,
+        "acl4ssr-china-domain": 500,
+        "acl4ssr-china-ip": 5_000,
+        "acl4ssr-apple": 20,
+        "xray-cn": 5_000,
+        "xray-apple": 1_500,
+        "xray-tesla": 10,
+        "xray-foreign": 500,
+        "xray-foreign-full": 250,
+        "xray-cn-ip": 8_000,
+    }.items():
+        require(key, parsed[key].rules, minimum)
+
+    def combine(keys: Iterable[str]) -> list[Rule]:
+        rules: set[Rule] = set()
+        for key in keys:
+            rules.update(parsed[key].rules)
+        return dedupe_sorted(rules)
+
+    cn_all = combine(
+        (
+            "loyalsoldier-direct",
+            "karing-cn",
+            "bm7-chinamax-domain",
+            "xray-cn",
+            "acl4ssr-china-domain",
         )
-        raw[key] = values
-        source_info[key] = {"url": url, "entries": len(values)}
-        print(f"  {len(values)} entries", flush=True)
+    )
+    cn_domains = [rule for rule in cn_all if rule[0] in (2, 3)]
+    cn_ip_from_domains = [rule for rule in cn_all if rule[0] in (0, 1)]
 
-    direct_rules, direct_invalid = convert(raw["direct"], "direct.txt")
-    cn_domain_rules = [rule for rule in direct_rules if rule[0] == 2]
-    direct_ip_rules = [rule for rule in direct_rules if rule[0] != 2]
+    cn_ip_all = set(
+        combine(
+            (
+                "loyalsoldier-cncidr",
+                "karing-cn-ip",
+                "bm7-chinamax-ip",
+                "xray-cn-ip",
+                "acl4ssr-china-ip",
+            )
+        )
+    )
+    cn_ip_all.update(cn_ip_from_domains)
+    cn_ip = dedupe_sorted(rule for rule in cn_ip_all if rule[0] in (0, 1))
+    cn_domains = safe_cn_domains(
+        dedupe_sorted(cn_domains + [rule for rule in cn_ip_all if rule[0] in (2, 3)])
+    )
 
-    cn_ip_rules, cncidr_invalid = convert(raw["cncidr"], "cncidr.txt")
-    cn_ip_rules = sorted(set(cn_ip_rules) | set(direct_ip_rules), key=rule_sort_key)
+    apple = safe_direct(
+        combine(
+            (
+                "loyalsoldier-apple",
+                "loyalsoldier-icloud",
+                "karing-apple",
+                "xray-apple",
+                "bm7-apple-domain",
+                "bm7-apple",
+                "acl4ssr-apple",
+            )
+        )
+    )
+    tesla = safe_direct(
+        combine(
+            (
+                "karing-tesla",
+                "xray-tesla",
+                "bm7-tesla",
+            )
+        )
+    )
+    foreign = safe_foreign_direct(
+        combine(
+            (
+                "xray-foreign",
+                "xray-foreign-categories",
+                "xray-foreign-full",
+                "karing-microsoft-cn",
+                "karing-nvidia-cn",
+                "karing-samsung-cn",
+                "karing-nintendo-cn",
+                "karing-steam-cn",
+                "karing-google-cn",
+            )
+        )
+    )
+    apple_set = set(apple)
+    tesla_set = set(tesla)
+    # Keep Foreign-Direct self-contained.  Some entries overlap CN-Domains;
+    # both sets use DIRECT, so the overlap is harmless.
+    foreign = [rule for rule in foreign if rule not in apple_set and rule not in tesla_set]
 
-    apple_rules, apple_invalid = convert(raw["apple"] + raw["icloud"], "apple.txt + icloud.txt")
-    lan_rules, lan_invalid = convert(raw["lancidr"] + raw["private"], "lancidr.txt + private.txt")
+    lan = combine(
+        (
+            "loyalsoldier-lancidr",
+            "loyalsoldier-private",
+            "karing-private-ip",
+            "xray-private-ip",
+        )
+    )
 
-    minimums = {
-        "CN domains": (cn_domain_rules, 95_000),
-        "CN IP": (cn_ip_rules, 9_000),
-        "Apple": (apple_rules, 150),
-        "LAN": (lan_rules, 100),
-    }
-    for label, (rules, minimum) in minimums.items():
-        if len(rules) < minimum:
-            raise RuntimeError(f"{label}: only {len(rules)} rules, expected at least {minimum}")
+    require("CN domains", cn_domains, 100_000)
+    require("CN IP", cn_ip, 12_000)
+    require("Apple", apple, 1_500)
+    require("Tesla", tesla, 10)
+    require("Foreign direct", foreign, 500)
+    require("LAN", lan, 100)
 
-    cn_parts = split_even(cn_domain_rules, args.limit, min_parts=2)
-    outputs: list[Output] = []
+    cn_parts = split_even(cn_domains, args.limit, min_parts=2)
+    outputs: list[tuple[str, str, list[Rule], str]] = []
     for index, part in enumerate(cn_parts, start=1):
         outputs.append(
-            Output(
-                filename=f"CN-Domains-{index}.arrs",
-                name=f"国内域名直连 {index}/{len(cn_parts)}",
-                rules=part,
-                source="Loyalsoldier/clash-rules direct.txt",
+            (
+                f"CN-Domains-{index}.arrs",
+                f"国内域名直连 {index}/{len(cn_parts)}",
+                part,
+                "Loyalsoldier + blackmatrix7 + Karing + XTLS Xray + ACL4SSR",
             )
         )
     outputs.extend(
         [
-            Output(
-                filename="CN-IP.arrs",
-                name="国内 IP 直连",
-                rules=cn_ip_rules,
-                source="Loyalsoldier/clash-rules cncidr.txt",
+            (
+                "CN-IP.arrs",
+                "国内 IP 直连",
+                cn_ip,
+                "Loyalsoldier + blackmatrix7 + Karing + XTLS Xray + ACL4SSR",
             ),
-            Output(
-                filename="Apple.arrs",
-                name="Apple 直连",
-                rules=apple_rules,
-                source="Loyalsoldier/clash-rules apple.txt + icloud.txt",
+            (
+                "Apple.arrs",
+                "Apple 直连",
+                apple,
+                "Loyalsoldier + blackmatrix7 + Karing + XTLS Xray + ACL4SSR",
             ),
-            Output(
-                filename="LAN.arrs",
-                name="局域网直连",
-                rules=lan_rules,
-                source="Loyalsoldier/clash-rules lancidr.txt + private.txt",
+            (
+                "Tesla.arrs",
+                "Tesla 直连",
+                tesla,
+                "blackmatrix7 + Karing + XTLS Xray",
+            ),
+            (
+                "Foreign-Direct.arrs",
+                "国外可直连",
+                foreign,
+                "XTLS Xray geosite @cn + Karing @cn + AMD/Intel/Adobe/Samsung/NVIDIA",
+            ),
+            (
+                "LAN.arrs",
+                "局域网直连",
+                lan,
+                "Loyalsoldier + Karing + XTLS Xray",
             ),
         ]
     )
@@ -365,24 +928,30 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             stale.unlink()
 
     files: list[dict[str, object]] = []
-    for output in outputs:
-        path = out_dir / output.filename
-        info = write_arrs(
-            path,
-            output.name,
-            output.rules,
-            output.source,
-            generated_at,
-        )
-        validate_arrs(path, len(output.rules))
-        files.append(
-            {
-                **info,
-                "routing": "DIRECT",
-                "source": output.source,
-            }
-        )
-        print(f"wrote {path} ({len(output.rules)} rules)", flush=True)
+    for filename, name, rules, source in outputs:
+        path = out_dir / filename
+        info = write_arrs(path, name, rules, source, generated_at)
+        validate_arrs(path, len(rules))
+        files.append({**info, "routing": "DIRECT", "source": source})
+        print(f"wrote {path} ({len(rules)} rules)", flush=True)
+
+    source_info: dict[str, dict[str, object]] = {}
+    for spec in DOWNLOADS:
+        data, url = downloaded[spec.key]
+        source_info[spec.key] = {
+            "label": spec.label,
+            "url": url,
+            "bytes": len(data),
+        }
+
+    parsed_info = {
+        key: {
+            "rules": len(value.rules),
+            "invalid": value.invalid,
+            "skipped": value.skipped,
+        }
+        for key, value in sorted(parsed.items())
+    }
 
     manifest: dict[str, object] = {
         "generated_at": generated_at,
@@ -391,12 +960,15 @@ def build(args: argparse.Namespace) -> dict[str, object]:
         "split_limit": args.limit,
         "max_rules_per_set": MAX_RULES_PER_SET,
         "sources": source_info,
+        "parsed": parsed_info,
         "files": files,
-        "invalid_entries": {
-            "direct": direct_invalid,
-            "cncidr": cncidr_invalid,
-            "apple+icloud": apple_invalid,
-            "lancidr+private": lan_invalid,
+        "groups": {
+            "cn_domains": len(cn_domains),
+            "cn_ip": len(cn_ip),
+            "apple": len(apple),
+            "tesla": len(tesla),
+            "foreign_direct": len(foreign),
+            "lan": len(lan),
         },
     }
     (out_dir / "manifest.json").write_text(
@@ -424,7 +996,9 @@ def build(args: argparse.Namespace) -> dict[str, object]:
     )
     notes = f"""# Anywhere 分流规则 {release_date.replace('.', '-')}
 
-每日自动构建，数据源为 [Loyalsoldier/clash-rules](https://github.com/Loyalsoldier/clash-rules)。
+每日自动构建。默认国外走代理；国内、Apple、Tesla、国外可直连域名和局域网走 DIRECT。
+
+数据源：[Loyalsoldier/clash-rules](https://github.com/Loyalsoldier/clash-rules)、[blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script)、[KaringX/karing-ruleset](https://github.com/KaringX/karing-ruleset)、[XTLS/Xray-rules-dat](https://github.com/XTLS/Xray-rules-dat)、[ACL4SSR](https://github.com/ACL4SSR/ACL4SSR)。
 
 ## 订阅地址
 
@@ -432,7 +1006,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
 | --- | ---: | --- | --- |
 {table}
 
-> `CN-Domains-1.arrs` 和 `CN-Domains-2.arrs` 必须同时添加，两个文件合起来才是完整的国内域名列表。
+> `CN-Domains-1.arrs` 和 `CN-Domains-2.arrs` 必须同时添加。
+> `Foreign-Direct.arrs` 只包含 Xray geosite / Karing 标记为 `@cn` 的国外域名，以及 AMD/Intel/Adobe/Samsung/NVIDIA 等常见厂商分类；GitHub、Hugging Face、Steam 商店等仍走代理。
 
 ## 在 Anywhere 中配置
 
@@ -446,10 +1021,12 @@ def build(args: argparse.Namespace) -> dict[str, object]:
 ## 本次构建
 
 - 生成时间：`{generated_at}`
-- 国内域名：{len(cn_domain_rules):,} 条，拆成 {len(cn_parts)} 个文件
-- 国内 IP：{len(cn_ip_rules):,} 条
-- Apple / iCloud：{len(apple_rules):,} 条
-- 局域网：{len(lan_rules):,} 条
+- 国内域名：{len(cn_domains):,} 条，拆成 {len(cn_parts)} 个文件
+- 国内 IP：{len(cn_ip):,} 条
+- Apple / iCloud：{len(apple):,} 条
+- Tesla：{len(tesla):,} 条
+- 国外可直连：{len(foreign):,} 条
+- 局域网：{len(lan):,} 条
 
 规则文件只声明匹配范围；动作需要在 Anywhere 里按上表指派。文件的 `routing = 1` 只在首次导入时作为 DIRECT 的初始值，订阅刷新不会覆盖本地动作。
 
@@ -460,7 +1037,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
     (out_dir / "RELEASE_NOTES.md").write_text(notes, encoding="utf-8")
 
     print(
-        f"done: {len(files)} files, {sum(len(output.rules) for output in outputs):,} rules",
+        f"done: {len(files)} files, {sum(len(rules) for _, _, rules, _ in outputs):,} rules",
         flush=True,
     )
     return manifest
@@ -481,13 +1058,17 @@ def parse_args() -> argparse.Namespace:
         help=f"maximum rules per file (default: {DEFAULT_SPLIT_LIMIT})",
     )
     parser.add_argument(
-        "--source-dir",
-        type=Path,
+        "--cache-dir",
         default=None,
-        help="read source .txt files from this directory instead of downloading",
+        help="cache downloaded sources in this directory",
+    )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="ignore cached sources and download again",
     )
     parser.add_argument("--attempts", type=int, default=2, help="download attempts per mirror")
-    parser.add_argument("--timeout", type=int, default=45, help="download timeout in seconds")
+    parser.add_argument("--timeout", type=int, default=60, help="download timeout in seconds")
     return parser.parse_args()
 
 

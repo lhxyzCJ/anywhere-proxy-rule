@@ -1,8 +1,26 @@
-Rule data in the generated .arrs files is derived from:
+Rule data in the generated .arrs files is derived from these upstream projects:
 
   Loyalsoldier/clash-rules
   https://github.com/Loyalsoldier/clash-rules
   Licensed under GPL-3.0
+
+  blackmatrix7/ios_rule_script
+  https://github.com/blackmatrix7/ios_rule_script
+  Licensed under GPL-2.0
+
+  KaringX/karing-ruleset
+  https://github.com/KaringX/karing-ruleset
+  See the upstream repository for its license and source attribution.
+  The repository credits MetaCubeX, ACL4SSR and XTLS/Xray rule data.
+
+  XTLS/Xray-rules-dat
+  https://github.com/XTLS/Xray-rules-dat
+  Licensed under GPL-3.0
+
+  ACL4SSR/ACL4SSR
+  https://github.com/ACL4SSR/ACL4SSR
+  Licensed under CC-BY-SA-4.0
+  Introduced through KaringX/karing-ruleset.
 
 The build scripts and generated rule sets in this repository are distributed
 under GPL-3.0 as well. See LICENSE.

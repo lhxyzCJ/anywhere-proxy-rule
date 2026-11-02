@@ -1,33 +1,54 @@
 # Anywhere 分流规则
 
-为 [NodePassProject/Anywhere](https://github.com/NodePassProject/Anywhere)（iOS / iPadOS / macOS / tvOS）自动构建的 `.arrs` 分流规则。
+为 [NodePassProject/Anywhere](https://github.com/NodePassProject/Anywhere)（iOS / iPadOS / macOS / tvOS）自动构建的多源 `.arrs` 分流规则。
 
-目标很明确：**默认国外走代理，国内、Apple/iCloud、局域网走直连。**
+核心策略：
 
-规则源是 [Loyalsoldier/clash-rules](https://github.com/Loyalsoldier/clash-rules)，GitHub Actions 每天北京时间 **03:00** 自动拉取、转换并发布新的 Release。
+> **默认国外走代理；国内、Apple、Tesla、国外可直连域名和局域网走 DIRECT。**
+
+数据源包括 Loyalsoldier、blackmatrix7、Karing、XTLS Xray 官方 geo 数据和 ACL4SSR。GitHub Actions 每天北京时间 **03:00** 自动拉取、转换并发布新的 Release。
 
 ## 订阅地址
 
-下面的地址始终指向最新 Release，每天自动更新，不需要改订阅链接：
+下面的地址始终指向最新 Release，每天自动更新：
 
 | 规则集 | 条数 | 用途 | 动作 | 订阅 |
 | --- | ---: | --- | --- | --- |
-| `CN-Domains-1.arrs` | 约 55,000 | 国内域名直连（前半） | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/CN-Domains-1.arrs) |
-| `CN-Domains-2.arrs` | 约 55,000 | 国内域名直连（后半） | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/CN-Domains-2.arrs) |
-| `CN-IP.arrs` | 约 10,000 | 国内 IPv4 / IPv6 CIDR | DIRECT（可选） | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/CN-IP.arrs) |
-| `Apple.arrs` | 约 220 | Apple 下载/CDN、iCloud | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/Apple.arrs) |
-| `LAN.arrs` | 约 160 | 局域网 CIDR、路由器本地域名 | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/LAN.arrs) |
+| `CN-Domains-1.arrs` | 约 57,500 | 国内域名直连（前半） | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/CN-Domains-1.arrs) |
+| `CN-Domains-2.arrs` | 约 57,500 | 国内域名直连（后半） | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/CN-Domains-2.arrs) |
+| `CN-IP.arrs` | 约 16,800 | 国内 IPv4 / IPv6 CIDR | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/CN-IP.arrs) |
+| `Apple.arrs` | 约 1,800 | Apple / iCloud / App Store CDN | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/Apple.arrs) |
+| `Tesla.arrs` | 约 13 | Tesla 中国及全球域名 | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/Tesla.arrs) |
+| `Foreign-Direct.arrs` | 约 1,300 | 国外可直连域名（Xray/Karing `@cn` + 常见厂商） | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/Foreign-Direct.arrs) |
+| `LAN.arrs` | 约 170 | 局域网 CIDR、路由器本地域名 | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/LAN.arrs) |
 
-> **`CN-Domains-1.arrs` 和 `CN-Domains-2.arrs` 必须同时添加。** 两个文件合起来才是完整的国内域名列表，单独一个会漏掉一半。
+> **`CN-Domains-1.arrs` 和 `CN-Domains-2.arrs` 必须同时添加。**
+>
+> `Foreign-Direct.arrs` 不是“国外域名大全”，而是 Xray geosite / Karing 标记为 `@cn` 的国外域名，以及 AMD、Intel、Adobe、Samsung、NVIDIA 等常见驱动/软件厂商分类中适合直连的部分。GitHub、Hugging Face、Steam 商店等仍走代理。
 
-条数会随上游列表变化，以每次 Release 的 `manifest.json` 为准。
+条数会随上游变化，以每次 Release 的 `manifest.json` 为准。
+
+## 分流结构
+
+| 集合 | 内容 |
+| --- | --- |
+| `CN-Domains` | Loyalsoldier `direct`、Karing geosite `cn`、blackmatrix7 `ChinaMax_Domain`、Xray geosite `CN`/`GEOLOCATION-CN`/`TLD-CN`、ACL4SSR `ChinaDomain` 的并集 |
+| `CN-IP` | Loyalsoldier `cncidr`、Karing geoip `cn`、blackmatrix7 `ChinaMax_IP`、Xray geoip `CN`、ACL4SSR `ChinaIp` 的并集 |
+| `Apple` | Loyalsoldier `apple` + `icloud`、blackmatrix7 `Apple_Domain` + `Apple`、Karing geosite `apple`、Xray geosite `APPLE`、ACL4SSR `Apple` |
+| `Tesla` | blackmatrix7 `Tesla`、Karing geosite `tesla`、Xray geosite `TESLA` |
+| `Foreign-Direct` | Xray geosite `GEOLOCATION-!CN` 中带 `@cn` 属性的条目，Karing / Xray 的 `microsoft@cn`、`nvidia@cn`、`samsung@cn`、`nintendo@cn`、`steam@cn`、`google@cn` 等分类，以及 AMD / Intel / Adobe / Samsung / NVIDIA 厂商分类（过滤 Hugging Face、GitHub 等） |
+| `LAN` | Loyalsoldier `lancidr` + `private`、Karing geoip `private`、Xray geoip `PRIVATE` |
+
+这里没有单独的“国外代理列表”。原因是默认路由已经指向代理，国外流量天然走代理；如果再加入一个巨大的 PROXY 规则集，它会和 Apple/Tesla/国外直连集合在同一 User 层竞争，容易出现直连域名被误代理的问题。
+
+`Foreign-Direct` 中有一部分 `.cn` 域名和 `CN-Domains` 重叠，两边都是 DIRECT，重叠不会改变结果。
 
 ## 在 Anywhere 中配置
 
 1. 打开 **Routing**，路由模式选择 **Rule**。
 2. 默认路由选择你的代理节点、代理组或代理链。
 3. **Country Bypass** 选择 **中国 (CN)**。
-4. 添加上表中的 `.arrs` 订阅，逐条把动作设为 **DIRECT**。
+4. 添加上表全部 7 个 `.arrs` 订阅，逐条把动作设为 **DIRECT**。
 5. 内置服务规则保持 **Default**，不要批量指派 **PROXY**。
 6. 可选：把 **ADBlock** 设为 **REJECT**。
 
@@ -37,7 +58,7 @@
 Routing → 右上角 + → Subscribe Rule Set → 粘贴上面的 URL
 ```
 
-也可以先下载 `.arrs` 文件，再用 `Import Rule Set` 导入。
+也可以下载 `.arrs` 后用 `Import Rule Set` 导入。
 
 ### 为什么内置服务要留在 Default
 
@@ -51,40 +72,50 @@ ADBlock > Built-in > User > Neutral > Country Bypass
 
 ### Prevent DNS Leak
 
-如果开启了 **Prevent DNS Leak**，没有域名规则命中的国内域名不会再按“解析后的 IP”回退到 Country Bypass。此时 `CN-Domains-1/2` 的覆盖范围就很重要；也可以同时加上 `CN-IP.arrs`，让直连 IP 流量继续命中。
+如果开启了 **Prevent DNS Leak**，没有域名规则命中的国内域名不会再按“解析后的 IP”回退到 Country Bypass。此时 `CN-Domains-1/2` 的覆盖范围就很重要；`CN-IP` 也可以让字面 IP 连接继续命中直连。
 
 如果关闭 Prevent DNS Leak，Country Bypass 可以作为国内域名的 IP 兜底，但代价是 DNS 可能泄漏。
 
-## 这套规则怎么工作
+## 上游规则
 
-Anywhere 的规则文件只负责“匹配哪些目标”，动作由你在 App 里为每个规则集单独指派。
+| 上游 | 许可 | 本仓库使用的内容 |
+| --- | --- | --- |
+| [Loyalsoldier/clash-rules](https://github.com/Loyalsoldier/clash-rules) | GPL-3.0 | `direct`、`cncidr`、`apple`、`icloud`、`lancidr`、`private` |
+| [blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script) | GPL-2.0 | `ChinaMax_Domain`、`ChinaMax_IP`、`Apple_Domain`、`Apple`、`Tesla` |
+| [KaringX/karing-ruleset](https://github.com/KaringX/karing-ruleset) | 见上游 | `geo/geosite/*`、`geo/geoip/*`、`ACL4SSR/ChinaDomain`、`ChinaIp`、`Apple` |
+| [XTLS/Xray-rules-dat](https://github.com/XTLS/Xray-rules-dat) | GPL-3.0 | 官方 `geosite.dat`、`geoip-lite.dat` |
+| [ACL4SSR/ACL4SSR](https://github.com/ACL4SSR/ACL4SSR) | CC-BY-SA-4.0 | 通过 Karing 仓库引入 `ChinaDomain`、`ChinaIp`、`Apple` |
 
-本仓库生成的规则集全部写入：
-
-```text
-routing = 1
-```
-
-`routing = 1` 只是**首次导入**时把动作初始化为 DIRECT。订阅刷新只替换规则内容，不会覆盖你本地选择的动作，所以导入后仍然要在 Routing 里确认每条都是 **DIRECT**。
-
-转换关系：
+转换规则：
 
 ```text
 +.example.com       -> 2, example.com      # 域名后缀
 example.com        -> 2, example.com      # Anywhere 没有 exact-domain，按后缀近似
 1.2.3.0/24         -> 0, 1.2.3.0/24       # IPv4 CIDR
 2001:db8::/32      -> 1, 2001:db8::/32    # IPv6 CIDR
+DOMAIN-KEYWORD,x   -> 3, x                # 域名关键字
 ```
 
-`PROCESS-NAME`、`GEOIP`、`DST-PORT` 等 Anywhere 不支持的规则会被跳过。`direct.txt` 里的 110,000 多条域名会去重后平均拆成两个文件，每个都低于 Anywhere 单套 100,000 条的上限。
+### Xray GeoSite 的处理
+
+`geosite.dat` 使用 protobuf 存储，构建脚本直接解析，不依赖第三方库：
+
+- `Plain` / `Domain` / `Full` 映射为 Anywhere 的域名后缀规则；`Regex` 跳过。
+- `GEOLOCATION-!CN` 只保留带 `@cn` 属性的条目，作为国外可直连域名。
+- `MICROSOFT`、`NVIDIA`、`SAMSUNG`、`STEAM` 等分类同样只取 `@cn` 条目。
+- `AMD`、`INTEL`、`ADOBE`、`SAMSUNG`、`NVIDIA` 的完整厂商分类用于驱动/软件下载直连；`NVIDIA` 分类里的 Hugging Face 会在过滤阶段排除，GitHub 仍然走代理。
+- `geoip-lite.dat` 的 `CN` 转成 IPv4 / IPv6 CIDR，`PRIVATE` 并入 LAN。
+- IPv4-mapped IPv6（`::ffff:a.b.c.d`）会折回 IPv4，避免规则永远匹配不到 IPv4 流量。
+
+`PROCESS-NAME`、`IP-ASN`、`GEOIP`、`RULE-SET` 等 Anywhere 不支持的规则会被跳过。`akadns.net`、`akamaized.net`、`cloudfront.net` 这类过宽的 CDN 后缀不会进入 DIRECT 集合，避免把大量国外流量误判为直连。
 
 ## 更新机制
 
 - **定时**：每天 `19:00 UTC`，即北京时间 `03:00`。
 - **手动**：GitHub 仓库 → **Actions** → **Update rule sets** → **Run workflow**。
-- **Release**：标签格式 `rules-YYYY.MM.DD`。同一天重复运行会替换当天的 Release，不会产生重复版本。
-- **保留策略**：只保留最近 30 个 Release，更早的 Release 和标签会自动清理；`latest` 订阅链接不受影响。
-- **产物**：5 个 `.arrs` 文件、`manifest.json`、`SHA256SUMS`。
+- **Release**：标签格式 `rules-YYYY.MM.DD`。同一天重复运行会替换当天的 Release。
+- **保留策略**：只保留最近 **3 天**的 Release，更早的 Release 和标签会自动清理；`latest` 订阅链接不受影响。
+- **产物**：7 个 `.arrs` 文件、`manifest.json`、`SHA256SUMS`。
 - **状态**：仓库根目录的 `status.json` 每天更新一次，记录生成时间和各文件条数。
 - **固定链接**：`https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/<文件名>`。
 
@@ -98,29 +129,31 @@ example.com        -> 2, example.com      # Anywhere 没有 exact-domain，按�
 python3 scripts/build.py --out dist
 ```
 
+启用下载缓存，重复构建时不必重新下载：
+
+```bash
+python3 scripts/build.py --out dist --cache-dir .cache
+python3 scripts/build.py --out dist --cache-dir .cache --refresh
+```
+
 运行测试：
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-如果已经提前下载了上游 `.txt`，可以离线构建：
-
-```bash
-python3 scripts/build.py --out dist --source-dir /path/to/txt-files
-```
-
-脚本会检查每个来源的最小条数，下载不完整或解析异常时直接失败，不会发布被截断的规则集。
+脚本会检查每个来源的最小字节数和最小条数；下载不完整、解析异常或上游列表突然缩水时直接失败，不会发布被截断的规则集。
 
 ## 目录结构
 
 ```text
 .
-├── .github/workflows/update.yml   # 每日构建与 Release
-├── scripts/build.py               # 下载、转换、拆分、校验
-├── tests/test_build.py            # 转换逻辑单元测试
+├── .github/workflows/update.yml   # 每日构建、发布、保留 3 天 Release
+├── scripts/build.py               # 多源下载、Clash/Karing/Xray 解析、拆分、校验
+├── tests/test_build.py            # 解析与转换单元测试
 ├── status.json                    # 最近一次构建状态（每日更新）
 ├── LICENSE
+├── NOTICE
 └── README.md
 ```
 
@@ -128,6 +161,6 @@ python3 scripts/build.py --out dist --source-dir /path/to/txt-files
 
 ## 数据源与许可
 
-- 规则数据来自 [Loyalsoldier/clash-rules](https://github.com/Loyalsoldier/clash-rules)。
-- 上游项目使用 GPL-3.0，本仓库的转换脚本和生成的规则集同样按 **GPL-3.0** 发布，详见 [LICENSE](LICENSE)。
-- 本项目与 NodePassProject、Loyalsoldier 均无隶属关系。
+- 规则数据来自上表列出的上游项目，具体来源和许可见 [NOTICE](NOTICE)。
+- 本仓库的转换脚本和生成的规则集按 **GPL-3.0** 发布，详见 [LICENSE](LICENSE)。
+- 本项目与 NodePassProject 及各规则上游均无隶属关系。

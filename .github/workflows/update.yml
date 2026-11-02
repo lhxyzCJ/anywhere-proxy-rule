@@ -57,7 +57,7 @@ jobs:
           set -euo pipefail
           gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
             --jq '.[].tag_name' \
-            | tail -n +31 \
+            | tail -n +4 \
             | while read -r tag; do
                 [ -n "$tag" ] || continue
                 gh release delete "$tag" --cleanup-tag --yes >/dev/null 2>&1 || true

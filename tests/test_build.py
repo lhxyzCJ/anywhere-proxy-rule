@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -43,10 +44,105 @@ class RuleTests(unittest.TestCase):
     def test_ipv6(self):
         self.assertEqual(build.to_rule("2001:db8::1"), (1, "2001:db8::1/128"))
 
+    def test_ipv4_mapped_ipv6(self):
+        self.assertEqual(build.to_rule("::ffff:1.2.3.4"), (0, "1.2.3.4/32"))
+
     def test_invalid(self):
         self.assertIsNone(build.to_rule("bad domain"))
         self.assertIsNone(build.to_rule(""))
         self.assertIsNone(build.to_rule("-bad.example.com"))
+        self.assertIsNone(build.to_rule("c"))
+
+
+class ParserTests(unittest.TestCase):
+    def test_clash_rules(self):
+        parsed = build.parse_clash(
+            "payload:\n"
+            "  - DOMAIN-SUFFIX,example.com\n"
+            "  - DOMAIN-KEYWORD,example\n"
+            "  - IP-CIDR,1.2.3.0/24,no-resolve\n"
+            "  - PROCESS-NAME,Example\n"
+        )
+        self.assertEqual(
+            parsed.rules,
+            [(2, "example.com"), (3, "example"), (0, "1.2.3.0/24")],
+        )
+        self.assertEqual(parsed.invalid, 1)
+
+    def test_karing_json(self):
+        payload = {
+            "version": 2,
+            "rules": [
+                {
+                    "domain": ["example.com"],
+                    "domain_suffix": ["+.example.org", "c"],
+                    "domain_keyword": ["sample"],
+                    "ip_cidr": ["1.2.3.0/24"],
+                    "domain_regex": ["^regex$"],
+                    "process_name": ["Example"],
+                }
+            ],
+        }
+        parsed = build.parse_karing_json(json.dumps(payload).encode())
+        self.assertIn((0, "1.2.3.0/24"), parsed.rules)
+        self.assertIn((2, "example.com"), parsed.rules)
+        self.assertIn((2, "example.org"), parsed.rules)
+        self.assertIn((3, "sample"), parsed.rules)
+        self.assertEqual(parsed.skipped, 2)
+        self.assertEqual(parsed.invalid, 1)
+
+    def test_xray_geosite(self):
+        def varint(value):
+            result = bytearray()
+            while True:
+                byte = value & 0x7F
+                value >>= 7
+                if value:
+                    result.append(byte | 0x80)
+                else:
+                    result.append(byte)
+                    return bytes(result)
+
+        def field(number, wire, payload):
+            key = varint((number << 3) | wire)
+            if wire == 0:
+                return key + varint(payload)
+            return key + varint(len(payload)) + payload
+
+        attribute = field(1, 2, b"cn") + field(2, 0, 1)
+        domain = field(1, 0, 2) + field(2, 2, b"example.com") + field(3, 2, attribute)
+        regex = field(1, 0, 1) + field(2, 2, b"^regex$")
+        site = field(1, 2, b"TEST") + field(2, 2, domain) + field(2, 2, regex)
+        data = field(1, 2, site)
+
+        sites = build.parse_xray_geosite(data)
+        self.assertEqual(sites["TEST"][0][:2], (2, "example.com"))
+        parsed = build.xray_site_rules(sites, ("TEST",), only_cn=True)
+        self.assertEqual(parsed.rules, [(2, "example.com")])
+        self.assertEqual(parsed.skipped, 1)
+
+    def test_xray_geoip(self):
+        def varint(value):
+            result = bytearray()
+            while True:
+                byte = value & 0x7F
+                value >>= 7
+                if value:
+                    result.append(byte | 0x80)
+                else:
+                    result.append(byte)
+                    return bytes(result)
+
+        def field(number, wire, payload):
+            key = varint((number << 3) | wire)
+            if wire == 0:
+                return key + varint(payload)
+            return key + varint(len(payload)) + payload
+
+        cidr = field(1, 2, bytes([1, 2, 3, 0])) + field(2, 0, 24)
+        entry = field(1, 2, b"CN") + field(2, 2, cidr)
+        data = field(1, 2, entry)
+        self.assertEqual(build.parse_xray_geoip(data)["CN"], [(0, "1.2.3.0/24")])
 
 
 class SplitTests(unittest.TestCase):
