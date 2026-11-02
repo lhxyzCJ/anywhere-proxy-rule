@@ -53,6 +53,24 @@ class RuleTests(unittest.TestCase):
         self.assertIsNone(build.to_rule("-bad.example.com"))
         self.assertIsNone(build.to_rule("c"))
 
+    def test_privacy_test_domains_are_not_direct(self):
+        rules = [
+            (2, "browserleaks.com"),
+            (2, "www.browserleaks.com"),
+            (2, "browserleaks.io"),
+            (2, "example.cn"),
+            (2, "cn"),
+            (2, "com"),
+        ]
+        self.assertEqual(
+            build.safe_cn_domains(rules),
+            [(2, "example.cn"), (2, "cn")],
+        )
+        self.assertEqual(
+            build.safe_direct([(2, "dnsleaktest.com"), (2, "apple.com")]),
+            [(2, "apple.com")],
+        )
+
 
 class ParserTests(unittest.TestCase):
     def test_clash_rules(self):

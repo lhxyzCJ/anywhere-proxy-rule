@@ -103,6 +103,25 @@ FOREIGN_DIRECT_DENYLIST = {
     "huggingface.co",
 }
 
+# Privacy / DNS-leak test sites must never be DIRECT, otherwise the test page
+# itself is resolved by the local ISP resolver and reports a Chinese DNS IP.
+# blackmatrix7's ChinaMax_Domain currently contains browserleaks.com.
+NEVER_DIRECT_DOMAINS = {
+    "browserleaks.com",
+    "browserleaks.io",
+    "browserleaks.net",
+    "browserleaks.org",
+    "dnsleaktest.com",
+    "ipleak.net",
+    "whoer.net",
+    "dnscheck.tools",
+    "dnschecker.org",
+    "whatleaks.com",
+    "test-ipv6.com",
+    "ipv6-test.com",
+    "whatismyipaddress.com",
+}
+
 Rule = tuple[int, str]
 
 
@@ -537,12 +556,18 @@ def dedupe_sorted(rules: Iterable[Rule]) -> list[Rule]:
     return sorted(set(rules), key=lambda rule: (rule[0], rule[1]))
 
 
+def denied_direct_value(value: str, denylist: set[str]) -> bool:
+    return any(value == blocked or value.endswith("." + blocked) for blocked in denylist)
+
+
 def safe_direct(rules: Iterable[Rule]) -> list[Rule]:
     result: list[Rule] = []
     for rule_type, value in rules:
         if rule_type in (2, 3) and value in BROAD_DIRECT_SUFFIXES:
             continue
         if rule_type in (2, 3) and value in GENERIC_TLDS:
+            continue
+        if rule_type in (2, 3) and denied_direct_value(value, NEVER_DIRECT_DOMAINS):
             continue
         result.append((rule_type, value))
     return result
@@ -554,6 +579,8 @@ def safe_cn_domains(rules: Iterable[Rule]) -> list[Rule]:
     for rule_type, value in rules:
         if rule_type in (2, 3) and value in GENERIC_TLDS and value != "cn":
             continue
+        if rule_type in (2, 3) and denied_direct_value(value, NEVER_DIRECT_DOMAINS):
+            continue
         result.append((rule_type, value))
     return result
 
@@ -561,10 +588,7 @@ def safe_cn_domains(rules: Iterable[Rule]) -> list[Rule]:
 def safe_foreign_direct(rules: Iterable[Rule]) -> list[Rule]:
     result: list[Rule] = []
     for rule_type, value in safe_direct(rules):
-        if rule_type in (2, 3) and any(
-            value == blocked or value.endswith("." + blocked)
-            for blocked in FOREIGN_DIRECT_DENYLIST
-        ):
+        if rule_type in (2, 3) and denied_direct_value(value, FOREIGN_DIRECT_DENYLIST):
             continue
         result.append((rule_type, value))
     return result
@@ -1051,6 +1075,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
 - Tesla：{len(tesla):,} 条
 - 国外可直连：{len(foreign):,} 条
 - 局域网：{len(lan):,} 条
+- DNS 泄漏测试域名（`browserleaks.com`、`dnsleaktest.com`、`ipleak.net` 等）不会进入 DIRECT 集合
 
 规则文件只声明匹配范围；动作需要在 Anywhere 里按上表指派。文件的 `routing = 1` 只在首次导入时作为 DIRECT 的初始值，订阅刷新不会覆盖本地动作。
 

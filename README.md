@@ -83,6 +83,44 @@ ADBlock > Built-in > User > Neutral > Country Bypass
 
 如果关闭 Prevent DNS Leak，Country Bypass 可以作为国内域名的 IP 兜底，但代价是 DNS 可能泄漏。
 
+这个开关**不是**“所有 DNS 都走代理”的开关。它只关闭“用解析后的 IP 再匹配一次 CIDR”的回退逻辑；被规则判定为 **DIRECT** 的域名仍然使用 **Local Requests** 解析器，默认就是系统 / 运营商 DNS。
+
+### 为什么 DNS 泄漏测试会显示中国 IP
+
+DNS 泄漏测试网站显示的是**解析器出口 IP**，不是你的代理节点出口 IP。
+
+典型链路：
+
+1. 测试域名（例如 `browserleaks.com`）被 `CN-Domains` 判为 **DIRECT**；
+2. 页面和它的随机子域名都走直连；
+3. 直连解析使用 **Local Requests**（默认系统 DNS，通常是运营商 DNS）；
+4. 权威 DNS 记录到中国 DNS 解析器 IP，测试页面就显示中国 IP。
+
+上游 `blackmatrix7/ChinaMax_Domain` 里确实包含 `browserleaks.com`，旧版 `All-Direct.arrs` 会把它当国内域名直连。构建脚本现在通过 `NEVER_DIRECT_DOMAINS` 排除以下测试站点，让它们回落到默认代理：
+
+```text
+browserleaks.com / .io / .net / .org
+dnsleaktest.com
+ipleak.net
+whoer.net
+dnscheck.tools
+dnschecker.org
+whatleaks.com
+test-ipv6.com
+ipv6-test.com
+whatismyipaddress.com
+```
+
+如果你的订阅还是旧版，先更新订阅；或者在 Anywhere 里新建一个 **PROXY** 规则集，把上面这些域名放进去并排在 `All-Direct` 上面。同层内相同后缀按规则集顺序，后插入的规则集优先。
+
+如果换成不在列表里的测试站仍然显示中国 IP，通常不是规则问题，而是：
+
+- 代理服务端自己使用中国 DNS 解析；
+- 代理链的上一跳/落地节点在中国；
+- 你用的协议或配置要求本地解析目标域名。
+
+可以看 Anywhere 的请求日志确认该域名是 `DIRECT` 还是走代理；如果确认走代理，就在 **DNS → Proxies → Resolver** 里改成国外 DoH（例如 `https://cloudflare-dns.com/dns-query`），或换一个 DNS 配置正常的节点。不要把 **Local Requests** 改成国外 DoH，否则国内直连站点可能解析到海外 CDN，速度和就近调度都会变差。
+
 ## 上游规则
 
 | 上游 | 许可 | 本仓库使用的内容 |
