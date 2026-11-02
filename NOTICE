@@ -1,0 +1,8 @@
+Rule data in the generated .arrs files is derived from:
+
+  Loyalsoldier/clash-rules
+  https://github.com/Loyalsoldier/clash-rules
+  Licensed under GPL-3.0
+
+The build scripts and generated rule sets in this repository are distributed
+under GPL-3.0 as well. See LICENSE.

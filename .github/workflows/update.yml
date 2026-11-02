@@ -1,0 +1,74 @@
+name: Update rule sets
+
+on:
+  schedule:
+    # 19:00 UTC = 03:00 Asia/Shanghai
+    - cron: "0 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-rules
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test converter
+        run: python -m unittest discover -s tests -v
+
+      - name: Build .arrs files
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python scripts/build.py --out dist
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="rules-$(TZ=Asia/Shanghai date +%Y.%m.%d)"
+          gh release delete "$TAG" --cleanup-tag --yes >/dev/null 2>&1 || true
+          git push origin ":refs/tags/$TAG" >/dev/null 2>&1 || true
+          gh release create "$TAG" \
+            dist/*.arrs dist/manifest.json dist/SHA256SUMS \
+            --title "Anywhere 分流规则 $(TZ=Asia/Shanghai date +%Y-%m-%d)" \
+            --notes-file dist/RELEASE_NOTES.md \
+            --latest
+
+      - name: Record status
+        if: github.ref_name == github.event.repository.default_branch
+        run: |
+          set -euo pipefail
+          cp dist/status.json status.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add status.json
+          if git diff --cached --quiet; then
+            echo "status unchanged"
+            exit 0
+          fi
+          git commit -m "chore: update rule status $(date -u +%F)"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          if [ -f dist/RELEASE_NOTES.md ]; then
+            cat dist/RELEASE_NOTES.md >> "$GITHUB_STEP_SUMMARY"
+          fi
