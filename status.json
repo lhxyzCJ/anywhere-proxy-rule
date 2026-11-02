@@ -1,11 +1,11 @@
 {
   "files": {
     "Apple.arrs": 217,
-    "CN-Domains-1.arrs": 55069,
-    "CN-Domains-2.arrs": 55069,
+    "CN-Domains-1.arrs": 55071,
+    "CN-Domains-2.arrs": 55070,
     "CN-IP.arrs": 10012,
     "LAN.arrs": 160
   },
   "release_tag": "rules-2026.11.02",
-  "updated_at": "2026-11-02T10:35:46Z"
+  "updated_at": "2026-11-02T10:43:25Z"
 }
