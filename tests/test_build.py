@@ -71,6 +71,34 @@ class RuleTests(unittest.TestCase):
             [(2, "apple.com")],
         )
 
+    def test_only_steam_download_domains_are_direct(self):
+        rules = [
+            (2, "steamcontent.com"),
+            (2, "alibaba.cdn.steampipe.steamcontent.com"),
+            (2, "steamcontent.tnkjmec.com"),
+            (2, "cm.steampowered.com"),
+            (2, "content.steamchina.com"),
+            (2, "steampowered.com"),
+            (2, "steamcommunity.com"),
+            (2, "steamchina.com"),
+            (2, "steamstatic.com.8686c.com"),
+            (2, "steampp.net"),
+        ]
+        self.assertEqual(
+            build.safe_cn_domains(rules),
+            [
+                (2, "steamcontent.com"),
+                (2, "alibaba.cdn.steampipe.steamcontent.com"),
+                (2, "steamcontent.tnkjmec.com"),
+                (2, "cm.steampowered.com"),
+                (2, "content.steamchina.com"),
+            ],
+        )
+        self.assertEqual(
+            build.safe_direct([(2, "steamcommunity.com"), (2, "steamcontent.com")]),
+            [(2, "steamcontent.com")],
+        )
+
 
 class ParserTests(unittest.TestCase):
     def test_clash_rules(self):

@@ -122,6 +122,29 @@ NEVER_DIRECT_DOMAINS = {
     "whatismyipaddress.com",
 }
 
+# Steam download CDNs are the only Steam-related domains that should be
+# direct.  The store, community, login and client-update infrastructure stays
+# on the proxy.  Domain entries are stored as suffixes because Anywhere has no
+# exact-domain rule type; the listed subdomains are still scoped correctly.
+STEAM_DOWNLOAD_DOMAINS = {
+    "steamcontent.com",
+    "steamcontent.tnkjmec.com",
+    "steampipe.akamaized.net",
+    "steamserver.net",
+    "cm.steampowered.com",
+    "steamcdn-a.akamaihd.net",
+    "client-update.queniuqe.com",
+    "dl.steam.clngaa.com",
+    "st.dl.bscstorage.net",
+    "st.dl.eccdnx.com",
+    "st.dl.pinyuncloud.com",
+    "dl.steam.ksyna.com",
+    "lv.queniujq.cn",
+    "xz.pphimalayanrt.com",
+    "steampowered.com.8686c.com",
+    "content.steamchina.com",
+}
+
 Rule = tuple[int, str]
 
 
@@ -560,6 +583,17 @@ def denied_direct_value(value: str, denylist: set[str]) -> bool:
     return any(value == blocked or value.endswith("." + blocked) for blocked in denylist)
 
 
+def is_steam_download(value: str) -> bool:
+    return any(
+        value == allowed or value.endswith("." + allowed)
+        for allowed in STEAM_DOWNLOAD_DOMAINS
+    )
+
+
+def is_steam_domain(value: str) -> bool:
+    return "steam" in value
+
+
 def safe_direct(rules: Iterable[Rule]) -> list[Rule]:
     result: list[Rule] = []
     for rule_type, value in rules:
@@ -568,6 +602,8 @@ def safe_direct(rules: Iterable[Rule]) -> list[Rule]:
         if rule_type in (2, 3) and value in GENERIC_TLDS:
             continue
         if rule_type in (2, 3) and denied_direct_value(value, NEVER_DIRECT_DOMAINS):
+            continue
+        if rule_type in (2, 3) and is_steam_domain(value) and not is_steam_download(value):
             continue
         result.append((rule_type, value))
     return result
@@ -580,6 +616,8 @@ def safe_cn_domains(rules: Iterable[Rule]) -> list[Rule]:
         if rule_type in (2, 3) and value in GENERIC_TLDS and value != "cn":
             continue
         if rule_type in (2, 3) and denied_direct_value(value, NEVER_DIRECT_DOMAINS):
+            continue
+        if rule_type in (2, 3) and is_steam_domain(value) and not is_steam_download(value):
             continue
         result.append((rule_type, value))
     return result
@@ -889,6 +927,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             "xray-private-ip",
         )
     )
+    steam = dedupe_sorted((2, domain) for domain in STEAM_DOWNLOAD_DOMAINS)
 
     require("CN domains", cn_domains, 100_000)
     require("CN IP", cn_ip, 12_000)
@@ -896,11 +935,18 @@ def build(args: argparse.Namespace) -> dict[str, object]:
     require("Tesla", tesla, 10)
     require("Foreign direct", foreign, 500)
     require("LAN", lan, 100)
+    require("Steam download", steam, 16)
 
     # All generated sets use DIRECT, so they can be merged into one
     # subscription.  Deduplicate across sets to stay well below the 200k cap.
     all_direct = dedupe_sorted(
-        set(cn_domains) | set(cn_ip) | set(apple) | set(tesla) | set(foreign) | set(lan)
+        set(cn_domains)
+        | set(cn_ip)
+        | set(apple)
+        | set(tesla)
+        | set(foreign)
+        | set(lan)
+        | set(steam)
     )
     require("All direct", all_direct, 100_000)
     if len(all_direct) > MAX_RULES_PER_SET:
@@ -947,6 +993,12 @@ def build(args: argparse.Namespace) -> dict[str, object]:
                 "XTLS Xray geosite @cn + Karing @cn + AMD/Intel/Adobe/Samsung/NVIDIA",
             ),
             (
+                "Steam-Direct.arrs",
+                "Steam 下载直连",
+                steam,
+                "Steam download CDN domains",
+            ),
+            (
                 "LAN.arrs",
                 "局域网直连",
                 lan,
@@ -956,7 +1008,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
                 "All-Direct.arrs",
                 "全部直连（合并订阅）",
                 all_direct,
-                "Merged CN + Apple + Tesla + Foreign-Direct + LAN",
+                "Merged CN + Apple + Tesla + Foreign-Direct + Steam-Direct + LAN",
             ),
         ]
     )
@@ -1013,6 +1065,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
             "apple": len(apple),
             "tesla": len(tesla),
             "foreign_direct": len(foreign),
+            "steam_download": len(steam),
             "lan": len(lan),
         },
     }
@@ -1041,7 +1094,7 @@ def build(args: argparse.Namespace) -> dict[str, object]:
     )
     notes = f"""# Anywhere 分流规则 {release_date.replace('.', '-')}
 
-每日自动构建。默认国外走代理；国内、Apple、Tesla、国外可直连域名和局域网走 DIRECT。
+每日自动构建。默认国外走代理；国内、Apple、Tesla、国外可直连域名、Steam 下载域名和局域网走 DIRECT。
 
 数据源：[Loyalsoldier/clash-rules](https://github.com/Loyalsoldier/clash-rules)、[blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script)、[KaringX/karing-ruleset](https://github.com/KaringX/karing-ruleset)、[XTLS/Xray-rules-dat](https://github.com/XTLS/Xray-rules-dat)、[ACL4SSR](https://github.com/ACL4SSR/ACL4SSR)。
 
@@ -1055,7 +1108,8 @@ def build(args: argparse.Namespace) -> dict[str, object]:
 > 当前 Anywhere 代码允许每套 200,000 条；旧版若仍限制 100,000 条会拒绝，请更新 App 或使用拆分订阅。
 >
 > 拆分方案：`CN-Domains-1.arrs` 和 `CN-Domains-2.arrs` 必须同时添加。
-> `Foreign-Direct.arrs` 只包含 Xray geosite / Karing 标记为 `@cn` 的国外域名，以及 AMD/Intel/Adobe/Samsung/NVIDIA 等常见厂商分类；GitHub、Hugging Face、Steam 商店等仍走代理。
+> `Foreign-Direct.arrs` 只包含 Xray geosite / Karing 标记为 `@cn` 的国外域名，以及 AMD/Intel/Adobe/Samsung/NVIDIA 等常见厂商分类；GitHub、Hugging Face 等仍走代理。
+> `Steam-Direct.arrs` 只包含游戏下载 CDN（`steamcontent.com`、`steamserver.net`、`cm.steampowered.com` 等）；Steam 商店、社区、登录等其它 Steam 域名仍走默认代理。
 
 ## 在 Anywhere 中配置
 
@@ -1074,7 +1128,9 @@ def build(args: argparse.Namespace) -> dict[str, object]:
 - Apple / iCloud：{len(apple):,} 条
 - Tesla：{len(tesla):,} 条
 - 国外可直连：{len(foreign):,} 条
+- Steam 下载直连：{len(steam):,} 条
 - 局域网：{len(lan):,} 条
+- Steam 商店、社区、登录等非下载域名不会进入 DIRECT 集合
 - DNS 泄漏测试域名（`browserleaks.com`、`dnsleaktest.com`、`ipleak.net` 等）不会进入 DIRECT 集合
 
 规则文件只声明匹配范围；动作需要在 Anywhere 里按上表指派。文件的 `routing = 1` 只在首次导入时作为 DIRECT 的初始值，订阅刷新不会覆盖本地动作。

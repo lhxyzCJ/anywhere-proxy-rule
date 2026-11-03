@@ -21,6 +21,7 @@
 | `Apple.arrs` | 约 1,800 | Apple / iCloud / App Store CDN | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/Apple.arrs) |
 | `Tesla.arrs` | 约 13 | Tesla 中国及全球域名 | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/Tesla.arrs) |
 | `Foreign-Direct.arrs` | 约 1,300 | 国外可直连域名（Xray/Karing `@cn` + 常见厂商） | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/Foreign-Direct.arrs) |
+| `Steam-Direct.arrs` | 16 | Steam 游戏下载 CDN | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/Steam-Direct.arrs) |
 | `LAN.arrs` | 约 170 | 局域网 CIDR、路由器本地域名 | DIRECT | [订阅](https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/LAN.arrs) |
 
 > **只用一个地址：只订阅 `All-Direct.arrs` 即可。** 它已经合并下面所有 DIRECT 集合（当前约 134,500 条）。
@@ -29,7 +30,9 @@
 >
 > **拆分方案：`CN-Domains-1.arrs` 和 `CN-Domains-2.arrs` 必须同时添加。**
 >
-> `Foreign-Direct.arrs` 不是“国外域名大全”，而是 Xray geosite / Karing 标记为 `@cn` 的国外域名，以及 AMD、Intel、Adobe、Samsung、NVIDIA 等常见驱动/软件厂商分类中适合直连的部分。GitHub、Hugging Face、Steam 商店等仍走代理。
+> `Foreign-Direct.arrs` 不是“国外域名大全”，而是 Xray geosite / Karing 标记为 `@cn` 的国外域名，以及 AMD、Intel、Adobe、Samsung、NVIDIA 等常见驱动/软件厂商分类中适合直连的部分。GitHub、Hugging Face 等仍走代理。
+>
+> `Steam-Direct.arrs` 只包含游戏下载 CDN（含列出的客户端更新 CDN）。Steam 商店、社区、登录等其它 Steam 域名仍走默认代理；`CN-Domains` 和 `Foreign-Direct` 中非下载类 Steam 域名已被过滤。
 
 条数会随上游变化，以每次 Release 的 `manifest.json` 为准。
 
@@ -41,7 +44,8 @@
 | `CN-IP` | Loyalsoldier `cncidr`、Karing geoip `cn`、blackmatrix7 `ChinaMax_IP`、Xray geoip `CN`、ACL4SSR `ChinaIp` 的并集 |
 | `Apple` | Loyalsoldier `apple` + `icloud`、blackmatrix7 `Apple_Domain` + `Apple`、Karing geosite `apple`、Xray geosite `APPLE`、ACL4SSR `Apple` |
 | `Tesla` | blackmatrix7 `Tesla`、Karing geosite `tesla`、Xray geosite `TESLA` |
-| `Foreign-Direct` | Xray geosite `GEOLOCATION-!CN` 中带 `@cn` 属性的条目，Karing / Xray 的 `microsoft@cn`、`nvidia@cn`、`samsung@cn`、`nintendo@cn`、`steam@cn`、`google@cn` 等分类，以及 AMD / Intel / Adobe / Samsung / NVIDIA 厂商分类（过滤 Hugging Face、GitHub 等） |
+| `Foreign-Direct` | Xray geosite `GEOLOCATION-!CN` 中带 `@cn` 属性的条目，Karing / Xray 的 `microsoft@cn`、`nvidia@cn`、`samsung@cn`、`nintendo@cn`、`google@cn` 等分类，以及 AMD / Intel / Adobe / Samsung / NVIDIA 厂商分类（过滤 Hugging Face、GitHub 等；Steam 只保留下载域名到 `Steam-Direct`） |
+| `Steam-Direct` | 仅 `steamcontent.com`、`steamcontent.tnkjmec.com`、`steampipe.akamaized.net`、`steamserver.net`、`cm.steampowered.com`、`steamcdn-a.akamaihd.net`、`client-update.queniuqe.com`、`dl.steam.clngaa.com`、`st.dl.bscstorage.net`、`st.dl.eccdnx.com`、`st.dl.pinyuncloud.com`、`dl.steam.ksyna.com`、`lv.queniujq.cn`、`xz.pphimalayanrt.com`、`steampowered.com.8686c.com`、`content.steamchina.com` |
 | `LAN` | Loyalsoldier `lancidr` + `private`、Karing geoip `private`、Xray geoip `PRIVATE` |
 
 这里没有单独的“国外代理列表”。原因是默认路由已经指向代理，国外流量天然走代理；如果再加入一个巨大的 PROXY 规则集，它会和 Apple/Tesla/国外直连集合在同一 User 层竞争，容易出现直连域名被误代理的问题。
@@ -55,7 +59,7 @@
 3. **Country Bypass** 选择 **中国 (CN)**。
 4. 二选一：
    - **单地址**：只添加 `All-Direct.arrs`，动作设为 **DIRECT**。
-   - **拆分**：添加 `CN-Domains-1/2`、`CN-IP`、`Apple`、`Tesla`、`Foreign-Direct`、`LAN`，全部设为 **DIRECT**。
+   - **拆分**：添加 `CN-Domains-1/2`、`CN-IP`、`Apple`、`Tesla`、`Foreign-Direct`、`Steam-Direct`、`LAN`，全部设为 **DIRECT**。
 5. 内置服务规则保持 **Default**，不要批量指派 **PROXY**。
 6. 可选：把 **ADBlock** 设为 **REJECT**。
 
@@ -160,7 +164,7 @@ DOMAIN-KEYWORD,x   -> 3, x                # 域名关键字
 - **手动**：GitHub 仓库 → **Actions** → **Update rule sets** → **Run workflow**。
 - **Release**：标签格式 `rules-YYYY.MM.DD`。同一天重复运行会替换当天的 Release。
 - **保留策略**：只保留最近 **3 天**的 Release，更早的 Release 和标签会自动清理；`latest` 订阅链接不受影响。
-- **产物**：8 个 `.arrs` 文件（含单地址合并集）、`manifest.json`、`SHA256SUMS`。
+- **产物**：9 个 `.arrs` 文件（含单地址合并集和 Steam 下载集）、`manifest.json`、`SHA256SUMS`。
 - **状态**：仓库根目录的 `status.json` 每天更新一次，记录生成时间和各文件条数。
 - **固定链接**：`https://github.com/lhxyzCJ/anywhere-proxy-rule/releases/latest/download/<文件名>`。
 
