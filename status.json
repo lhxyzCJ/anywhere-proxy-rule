@@ -1,15 +1,15 @@
 {
   "files": {
-    "All-Direct.arrs": 134501,
+    "All-Direct.arrs": 134537,
     "Apple.arrs": 1838,
     "CN-Domains-1.arrs": 57633,
     "CN-Domains-2.arrs": 57632,
-    "CN-IP.arrs": 16589,
+    "CN-IP.arrs": 16625,
     "Foreign-Direct.arrs": 1310,
     "LAN.arrs": 173,
     "Steam-Direct.arrs": 16,
     "Tesla.arrs": 13
   },
-  "release_tag": "rules-2026.11.22",
-  "updated_at": "2026-11-21T23:39:01Z"
+  "release_tag": "rules-2026.11.23",
+  "updated_at": "2026-11-22T23:56:57Z"
 }
